@@ -9,7 +9,7 @@ const errorDisplay = document.getElementById('errorDisplay');
 const resultsSection = document.getElementById('resultsSection');
 
 // API Configuration
-const API_URL = 'https://on-page-seo-advisor-1.onrender.com/analyze';
+const API_URL = 'https://onpage-seo-analyzer.onrender.com/analyze';
 const REQUEST_TIMEOUT = 30000; // 30 seconds
 
 // Utility Functions
