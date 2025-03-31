@@ -60,20 +60,29 @@ seoForm.addEventListener('submit', async (e) => {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
         
+        console.log('Sending request to:', API_URL);
+        console.log('Request payload:', { url, keyword, country });
+        
         const response = await fetch(API_URL, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
+                'Accept': 'application/json'
             },
             body: JSON.stringify({ url, keyword, country }),
             signal: controller.signal
         });
         
         clearTimeout(timeoutId);
+        
+        console.log('Response status:', response.status);
+        console.log('Response headers:', Object.fromEntries(response.headers.entries()));
+        
         const data = await response.json();
+        console.log('Response data:', data);
 
         if (!response.ok) {
-            throw new Error(data.detail || response.statusText);
+            throw new Error(data.detail || response.statusText || `HTTP error! status: ${response.status}`);
         }
 
         if (data.status !== 'success') {
@@ -82,10 +91,13 @@ seoForm.addEventListener('submit', async (e) => {
 
         displayResults(data);
     } catch (error) {
+        console.error('Error details:', error);
         if (error.name === 'AbortError') {
             showError('Request timed out. Please try again.');
+        } else if (error.message.includes('Failed to fetch')) {
+            showError('Unable to connect to the server. Please check if the service is available.');
         } else {
-            showError(error.message || 'Network error or API unavailable');
+            showError(`Error: ${error.message || 'Network error or API unavailable'}`);
         }
     } finally {
         setLoading(false);
