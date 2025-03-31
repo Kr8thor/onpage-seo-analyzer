@@ -81,8 +81,11 @@ async function handleSubmit(event) {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'Accept': 'application/json'
+                'Accept': 'application/json',
+                'Origin': window.location.origin
             },
+            mode: 'cors',
+            credentials: 'omit',
             body: JSON.stringify({ url, keyword, country })
         });
 
