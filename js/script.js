@@ -12,6 +12,28 @@ const resultsSection = document.getElementById('resultsSection');
 const API_URL = 'https://onpage-seo-analyzer.onrender.com/analyze';
 const REQUEST_TIMEOUT = 30000; // 30 seconds
 
+// Country code mapping
+const COUNTRY_CODES = {
+    'united states': 'us',
+    'ireland': 'ie',
+    'united kingdom': 'gb',
+    'canada': 'ca',
+    'australia': 'au',
+    'new zealand': 'nz',
+    'germany': 'de',
+    'france': 'fr',
+    'spain': 'es',
+    'italy': 'it',
+    'japan': 'jp',
+    'korea': 'kr',
+    'china': 'cn',
+    'india': 'in',
+    'brazil': 'br',
+    'mexico': 'mx',
+    'russia': 'ru',
+    'south africa': 'za'
+};
+
 // Utility Functions
 function formatNumber(value) {
     if (typeof value !== 'number') return 'N/A';
@@ -32,6 +54,12 @@ function validateUrl(url) {
     }
 }
 
+function getCountryCode(countryName) {
+    if (!countryName) return 'us'; // Default to US if no country specified
+    const code = COUNTRY_CODES[countryName.toLowerCase()];
+    return code || 'us'; // Default to US if country not found in mapping
+}
+
 // Form Submission Handler
 seoForm.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -39,7 +67,7 @@ seoForm.addEventListener('submit', async (e) => {
     // Get and trim input values
     const url = urlInput.value.trim();
     const keyword = keywordInput.value.trim();
-    const country = countryInput.value.trim() || 'us';
+    const country = getCountryCode(countryInput.value.trim());
 
     // Basic validation
     if (!url || !keyword) {
