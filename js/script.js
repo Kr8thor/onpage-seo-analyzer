@@ -9,7 +9,7 @@ const errorDisplay = document.getElementById('errorDisplay');
 const resultsSection = document.getElementById('resultsSection');
 
 // API Configuration
-const API_URL = 'https://onpage-seo-analyzer.onrender.com/analyze';
+const API_URL = 'https://on-page-seo-advisor-1.onrender.com/analyze';
 const REQUEST_TIMEOUT = 30000; // 30 seconds
 
 // Country code mapping
@@ -56,8 +56,56 @@ function validateUrl(url) {
 
 function getCountryCode(countryName) {
     if (!countryName) return 'us'; // Default to US if no country specified
-    const code = COUNTRY_CODES[countryName.toLowerCase()];
-    return code || 'us'; // Default to US if country not found in mapping
+    
+    // Clean and normalize the input
+    const normalizedInput = countryName.toLowerCase().trim();
+    
+    // First try direct match
+    if (COUNTRY_CODES[normalizedInput]) {
+        return COUNTRY_CODES[normalizedInput];
+    }
+    
+    // If input is already a valid 2-letter code, return it
+    if (/^[a-z]{2}$/.test(normalizedInput)) {
+        return normalizedInput;
+    }
+    
+    // Try to find a partial match in the keys
+    const matchingKey = Object.keys(COUNTRY_CODES).find(key => 
+        key.includes(normalizedInput) || normalizedInput.includes(key)
+    );
+    
+    if (matchingKey) {
+        return COUNTRY_CODES[matchingKey];
+    }
+    
+    console.warn(`Country code not found for "${countryName}", defaulting to "us"`);
+    return 'us'; // Default to US if no match found
+}
+
+// Additional Utility Functions
+function getMetricStatus(value, benchmark, type = 'higher') {
+    if (typeof value !== 'number' || typeof benchmark !== 'number') return 'neutral';
+    const percentage = ((value - benchmark) / benchmark) * 100;
+    if (type === 'higher') {
+        return percentage >= 10 ? 'good' : percentage <= -10 ? 'bad' : 'neutral';
+    } else {
+        return percentage <= -10 ? 'good' : percentage >= 10 ? 'bad' : 'neutral';
+    }
+}
+
+function formatMetric(value, type = 'number') {
+    if (typeof value !== 'number') return 'N/A';
+    switch (type) {
+        case 'percentage':
+            return `${value.toFixed(2)}%`;
+        case 'time':
+            return `${value.toFixed(2)}s`;
+        case 'count':
+            return value.toLocaleString();
+        default:
+            return value.toFixed(2);
+    }
 }
 
 // Form Submission Handler
@@ -67,7 +115,10 @@ seoForm.addEventListener('submit', async (e) => {
     // Get and trim input values
     const url = urlInput.value.trim();
     const keyword = keywordInput.value.trim();
-    const country = getCountryCode(countryInput.value.trim());
+    const countryInput = document.getElementById('countryInput').value.trim();
+    const country = getCountryCode(countryInput);
+    
+    console.log('Country input:', countryInput, '-> Country code:', country);
 
     // Basic validation
     if (!url || !keyword) {
@@ -85,12 +136,14 @@ seoForm.addEventListener('submit', async (e) => {
     setLoading(true);
 
     try {
+        console.log('Starting request...');
+        console.log('API URL:', API_URL);
+        console.log('Request payload:', { url, keyword, country });
+
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
         
-        console.log('Sending request to:', API_URL);
-        console.log('Request payload:', { url, keyword, country });
-        
+        console.log('Sending fetch request...');
         const response = await fetch(API_URL, {
             method: 'POST',
             headers: {
@@ -99,31 +152,54 @@ seoForm.addEventListener('submit', async (e) => {
             },
             body: JSON.stringify({ url, keyword, country }),
             signal: controller.signal
+        }).catch(error => {
+            console.error('Fetch error:', error);
+            throw error;
         });
         
         clearTimeout(timeoutId);
         
-        console.log('Response status:', response.status);
-        console.log('Response headers:', Object.fromEntries(response.headers.entries()));
+        console.log('Response received:', {
+            status: response.status,
+            statusText: response.statusText
+        });
         
-        const data = await response.json();
+        console.log('Parsing response JSON...');
+        const data = await response.json().catch(error => {
+            console.error('JSON parsing error:', error);
+            throw new Error('Failed to parse response data');
+        });
+        
         console.log('Response data:', data);
 
         if (!response.ok) {
+            // Handle specific error cases
+            if (response.status === 422) {
+                throw new Error('Invalid input data. Please check your URL and keyword.');
+            } else if (response.status >= 500) {
+                throw new Error('Server error. Please try again later.');
+            }
             throw new Error(data.detail || response.statusText || `HTTP error! status: ${response.status}`);
         }
 
-        if (data.status !== 'success') {
+        if (!data || data.status !== 'success') {
             throw new Error(data.error_message || 'Analysis failed');
         }
 
+        if (!data.target_analysis) {
+            throw new Error('No analysis data received');
+        }
+
+        console.log('Displaying results...');
         displayResults(data);
     } catch (error) {
-        console.error('Error details:', error);
+        console.error('Error in form submission:', error);
         if (error.name === 'AbortError') {
             showError('Request timed out. Please try again.');
         } else if (error.message.includes('Failed to fetch')) {
             showError('Unable to connect to the server. Please check if the service is available.');
+        } else if (error.message.includes('parse response data')) {
+            showError('Invalid response from server. Please try again.');
         } else {
             showError(`Error: ${error.message || 'Network error or API unavailable'}`);
         }
@@ -150,8 +226,19 @@ function showError(message) {
 
 // Results Display
 function displayResults(data) {
+    console.log('Raw response data:', data);
+    
     // Validate response data
-    if (!data.target_analysis) {
+    if (!data) {
+        showError('No data received from server');
+        return;
+    }
+
+    // Check if we're getting the raw analysis data directly
+    const analysisData = data.target_analysis || data;
+    console.log('Analysis data:', analysisData);
+
+    if (!analysisData) {
         showError('Invalid response format from server');
         return;
     }
@@ -166,143 +253,298 @@ function displayResults(data) {
         existingWarning.remove();
     }
 
-    // Display target information
-    const targetInfo = document.querySelector('#targetInfo .card-content');
-    targetInfo.innerHTML = `
-        <p><strong>URL:</strong> ${data.target_analysis.url}</p>
-        <p><strong>Keyword:</strong> ${data.target_analysis.keyword}</p>
-    `;
-
-    // Display title analysis
-    const titleAnalysis = document.querySelector('#titleAnalysis .card-content');
-    titleAnalysis.innerHTML = `
-        <p><strong>Title:</strong> ${data.target_analysis.title?.text || 'Not found'}</p>
-        <p><strong>Length:</strong> ${formatNumber(data.target_analysis.title?.length)} characters</p>
-        <p><strong>Keyword Position:</strong> ${data.target_analysis.title?.keyword_position || 'Not found'}</p>
-    `;
-
-    // Display meta description
-    const metaAnalysis = document.querySelector('#metaAnalysis .card-content');
-    metaAnalysis.innerHTML = `
-        <p><strong>Description:</strong> ${data.target_analysis.meta_description?.text || 'Not found'}</p>
-        <p><strong>Length:</strong> ${formatNumber(data.target_analysis.meta_description?.length)} characters</p>
-        <p><strong>Keyword Position:</strong> ${data.target_analysis.meta_description?.keyword_position || 'Not found'}</p>
-    `;
-
-    // Display headings analysis
-    const headingsAnalysis = document.querySelector('#headingsAnalysis .card-content');
-    headingsAnalysis.innerHTML = `
-        <p><strong>H1 Count:</strong> ${formatNumber(data.target_analysis.headings?.h1_count)}</p>
-        <p><strong>H2 Count:</strong> ${formatNumber(data.target_analysis.headings?.h2_count)}</p>
-        <p><strong>H3 Count:</strong> ${formatNumber(data.target_analysis.headings?.h3_count)}</p>
-        <p><strong>Keyword in H1:</strong> ${data.target_analysis.headings?.keyword_in_h1 ? 'Yes' : 'No'}</p>
-    `;
-
-    // Display content analysis
-    const contentAnalysis = document.querySelector('#contentAnalysis .card-content');
-    contentAnalysis.innerHTML = `
-        <p><strong>Word Count:</strong> ${formatNumber(data.target_analysis.content?.word_count)}</p>
-        <p><strong>Keyword Density:</strong> ${formatPercentage(data.target_analysis.content?.keyword_density)}</p>
-        <p><strong>Readability Score:</strong> ${formatNumber(data.target_analysis.content?.readability_score)}</p>
-    `;
-
-    // Display links analysis
-    const linksAnalysis = document.querySelector('#linksAnalysis .card-content');
-    linksAnalysis.innerHTML = `
-        <p><strong>Internal Links:</strong> ${formatNumber(data.target_analysis.links?.internal_count)}</p>
-        <p><strong>External Links:</strong> ${formatNumber(data.target_analysis.links?.external_count)}</p>
-        <p><strong>Broken Links:</strong> ${formatNumber(data.target_analysis.links?.broken_count)}</p>
-    `;
-
-    // Display images analysis
-    const imagesAnalysis = document.querySelector('#imagesAnalysis .card-content');
-    imagesAnalysis.innerHTML = `
-        <p><strong>Total Images:</strong> ${formatNumber(data.target_analysis.images?.total_count)}</p>
-        <p><strong>Images with Alt:</strong> ${formatNumber(data.target_analysis.images?.with_alt_count)}</p>
-        <p><strong>Images without Alt:</strong> ${formatNumber(data.target_analysis.images?.without_alt_count)}</p>
-    `;
-
-    // Display schema analysis
-    const schemaAnalysis = document.querySelector('#schemaAnalysis .card-content');
-    schemaAnalysis.innerHTML = `
-        <p><strong>Schema Types:</strong> ${data.target_analysis.schema?.types?.join(', ') || 'None found'}</p>
-        <p><strong>Valid Schema:</strong> ${data.target_analysis.schema?.is_valid ? 'Yes' : 'No'}</p>
-    `;
-
-    // Display technical analysis
-    const techAnalysis = document.querySelector('#techAnalysis .card-content');
-    techAnalysis.innerHTML = `
-        <p><strong>Mobile Responsive:</strong> ${data.target_analysis.technical?.mobile_responsive ? 'Yes' : 'No'}</p>
-        <p><strong>SSL Enabled:</strong> ${data.target_analysis.technical?.ssl_enabled ? 'Yes' : 'No'}</p>
-        <p><strong>Canonical URL:</strong> ${data.target_analysis.technical?.canonical_url || 'Not set'}</p>
-    `;
-
-    // Display performance metrics
-    const performanceAnalysis = document.querySelector('#performanceAnalysis .card-content');
-    performanceAnalysis.innerHTML = `
-        <p><strong>Page Load Time:</strong> ${formatNumber(data.target_analysis.performance?.page_load_time)}s</p>
-        <p><strong>First Contentful Paint:</strong> ${formatNumber(data.target_analysis.performance?.first_contentful_paint)}s</p>
-        <p><strong>Time to Interactive:</strong> ${formatNumber(data.target_analysis.performance?.time_to_interactive)}s</p>
-    `;
-
-    // Display benchmarks
-    const benchmarksDisplay = document.querySelector('#benchmarksDisplay .card-content');
-    benchmarksDisplay.innerHTML = `
-        <p><strong>Word Count Benchmark:</strong> ${data.target_analysis.benchmarks?.word_count || 'N/A'}</p>
-        <p><strong>Keyword Density Benchmark:</strong> ${data.target_analysis.benchmarks?.keyword_density || 'N/A'}</p>
-        <p><strong>Readability Benchmark:</strong> ${data.target_analysis.benchmarks?.readability || 'N/A'}</p>
-    `;
-
-    // Display recommendations
-    const recommendationsDisplay = document.querySelector('#recommendationsDisplay .card-content');
-    if (Array.isArray(data.target_analysis.recommendations)) {
-        recommendationsDisplay.innerHTML = data.target_analysis.recommendations
-            .map(rec => `
-                <div class="recommendation sev-${(rec.severity || 'medium').toLowerCase()}">
-                    <p><strong>${rec.title || 'Untitled Recommendation'}</strong></p>
-                    <p>${rec.description || 'No description available'}</p>
-                    ${rec.resource_link ? `<p><a href="${rec.resource_link}" target="_blank" rel="noopener noreferrer">Learn more</a></p>` : ''}
+    try {
+        // Display target information with status indicators
+        const targetInfo = document.querySelector('#targetInfo .card-content');
+        targetInfo.innerHTML = `
+            <div class="info-grid">
+                <div class="info-item">
+                    <span class="label">URL:</span>
+                    <span class="value">${analysisData.url || 'N/A'}</span>
                 </div>
-            `)
-            .join('');
-    } else {
-        recommendationsDisplay.innerHTML = '<p>No recommendations available</p>';
-    }
-
-    // Display competitor summary
-    const competitorSummary = document.querySelector('#competitorSummary .card-content');
-    if (Array.isArray(data.competitor_analysis_summary) && data.competitor_analysis_summary.length > 0) {
-        competitorSummary.innerHTML = `
-            <table class="competitor-table">
-                <thead>
-                    <tr>
-                        <th>URL</th>
-                        <th>Title Length</th>
-                        <th>Word Count</th>
-                        <th>Keyword Density</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    ${data.competitor_analysis_summary.map(comp => `
-                        <tr>
-                            <td>${comp.url || 'N/A'}</td>
-                            <td>${formatNumber(comp.title_length)}</td>
-                            <td>${formatNumber(comp.word_count)}</td>
-                            <td>${formatPercentage(comp.keyword_density)}</td>
-                        </tr>
-                    `).join('')}
-                </tbody>
-            </table>
+                <div class="info-item">
+                    <span class="label">Keyword:</span>
+                    <span class="value">${analysisData.keyword || 'N/A'}</span>
+                </div>
+            </div>
         `;
-    } else {
-        competitorSummary.innerHTML = '<p>No competitor data available</p>';
-    }
 
-    // Display warning if present
-    if (data.warning) {
-        const warningDiv = document.createElement('div');
-        warningDiv.className = 'warning-message';
-        warningDiv.textContent = data.warning;
-        resultsSection.insertBefore(warningDiv, resultsSection.firstChild);
+        // Display title analysis with status indicators
+        const titleAnalysis = document.querySelector('#titleAnalysis .card-content');
+        const titleStatus = getMetricStatus(analysisData.title?.length, 60);
+        titleAnalysis.innerHTML = `
+            <div class="metric-grid">
+                <div class="metric-item ${titleStatus}">
+                    <span class="label">Title Length</span>
+                    <span class="value">${formatMetric(analysisData.title?.length)} characters</span>
+                    <span class="tooltip">Recommended: 50-60 characters</span>
+                </div>
+                <div class="metric-item">
+                    <span class="label">Title Text</span>
+                    <span class="value">${analysisData.title?.text || 'Not found'}</span>
+                </div>
+                <div class="metric-item">
+                    <span class="label">Keyword Position</span>
+                    <span class="value">${analysisData.title?.keyword_position || 'Not found'}</span>
+                </div>
+            </div>
+        `;
+
+        // Display meta description with status indicators
+        const metaAnalysis = document.querySelector('#metaAnalysis .card-content');
+        const metaStatus = getMetricStatus(analysisData.meta_description?.length, 160);
+        metaAnalysis.innerHTML = `
+            <div class="metric-grid">
+                <div class="metric-item ${metaStatus}">
+                    <span class="label">Description Length</span>
+                    <span class="value">${formatMetric(analysisData.meta_description?.length)} characters</span>
+                    <span class="tooltip">Recommended: 150-160 characters</span>
+                </div>
+                <div class="metric-item">
+                    <span class="label">Description Text</span>
+                    <span class="value">${analysisData.meta_description?.text || 'Not found'}</span>
+                </div>
+                <div class="metric-item">
+                    <span class="label">Keyword Position</span>
+                    <span class="value">${analysisData.meta_description?.keyword_position || 'Not found'}</span>
+                </div>
+            </div>
+        `;
+
+        // Display headings analysis with visual indicators
+        const headingsAnalysis = document.querySelector('#headingsAnalysis .card-content');
+        const h1Status = getMetricStatus(analysisData.headings?.h1_count, 1);
+        headingsAnalysis.innerHTML = `
+            <div class="metric-grid">
+                <div class="metric-item ${h1Status}">
+                    <span class="label">H1 Count</span>
+                    <span class="value">${formatMetric(analysisData.headings?.h1_count, 'count')}</span>
+                    <span class="tooltip">Recommended: 1 H1 tag per page</span>
+                </div>
+                <div class="metric-item">
+                    <span class="label">H2 Count</span>
+                    <span class="value">${formatMetric(analysisData.headings?.h2_count, 'count')}</span>
+                </div>
+                <div class="metric-item">
+                    <span class="label">H3 Count</span>
+                    <span class="value">${formatMetric(analysisData.headings?.h3_count, 'count')}</span>
+                </div>
+                <div class="metric-item">
+                    <span class="label">Keyword in H1</span>
+                    <span class="value">${analysisData.headings?.keyword_in_h1 ? 'Yes' : 'No'}</span>
+                </div>
+            </div>
+        `;
+
+        // Display content analysis with benchmarks
+        const contentAnalysis = document.querySelector('#contentAnalysis .card-content');
+        const wordCountStatus = getMetricStatus(analysisData.content?.word_count, analysisData.benchmarks?.word_count);
+        const keywordDensityStatus = getMetricStatus(analysisData.content?.keyword_density, analysisData.benchmarks?.keyword_density);
+        contentAnalysis.innerHTML = `
+            <div class="metric-grid">
+                <div class="metric-item ${wordCountStatus}">
+                    <span class="label">Word Count</span>
+                    <span class="value">${formatMetric(analysisData.content?.word_count, 'count')}</span>
+                    <span class="tooltip">Benchmark: ${formatMetric(analysisData.benchmarks?.word_count, 'count')}</span>
+                </div>
+                <div class="metric-item ${keywordDensityStatus}">
+                    <span class="label">Keyword Density</span>
+                    <span class="value">${formatMetric(analysisData.content?.keyword_density, 'percentage')}</span>
+                    <span class="tooltip">Benchmark: ${formatMetric(analysisData.benchmarks?.keyword_density, 'percentage')}</span>
+                </div>
+                <div class="metric-item">
+                    <span class="label">Readability Score</span>
+                    <span class="value">${formatMetric(analysisData.content?.readability_score)}</span>
+                </div>
+            </div>
+        `;
+
+        // Display links analysis with status indicators
+        const linksAnalysis = document.querySelector('#linksAnalysis .card-content');
+        const brokenLinksStatus = getMetricStatus(analysisData.links?.broken_count, 0, 'lower');
+        linksAnalysis.innerHTML = `
+            <div class="metric-grid">
+                <div class="metric-item">
+                    <span class="label">Internal Links</span>
+                    <span class="value">${formatMetric(analysisData.links?.internal_count, 'count')}</span>
+                </div>
+                <div class="metric-item">
+                    <span class="label">External Links</span>
+                    <span class="value">${formatMetric(analysisData.links?.external_count, 'count')}</span>
+                </div>
+                <div class="metric-item ${brokenLinksStatus}">
+                    <span class="label">Broken Links</span>
+                    <span class="value">${formatMetric(analysisData.links?.broken_count, 'count')}</span>
+                    <span class="tooltip">Should be 0</span>
+                </div>
+            </div>
+        `;
+
+        // Display images analysis with status indicators
+        const imagesAnalysis = document.querySelector('#imagesAnalysis .card-content');
+        const altTextStatus = getMetricStatus(analysisData.images?.with_alt_count, analysisData.images?.total_count);
+        imagesAnalysis.innerHTML = `
+            <div class="metric-grid">
+                <div class="metric-item">
+                    <span class="label">Total Images</span>
+                    <span class="value">${formatMetric(analysisData.images?.total_count, 'count')}</span>
+                </div>
+                <div class="metric-item ${altTextStatus}">
+                    <span class="label">Images with Alt</span>
+                    <span class="value">${formatMetric(analysisData.images?.with_alt_count, 'count')}</span>
+                    <span class="tooltip">All images should have alt text</span>
+                </div>
+                <div class="metric-item">
+                    <span class="label">Images without Alt</span>
+                    <span class="value">${formatMetric(analysisData.images?.without_alt_count, 'count')}</span>
+                </div>
+            </div>
+        `;
+
+        // Display schema analysis with status indicators
+        const schemaAnalysis = document.querySelector('#schemaAnalysis .card-content');
+        const schemaStatus = analysisData.schema?.is_valid ? 'good' : 'bad';
+        schemaAnalysis.innerHTML = `
+            <div class="metric-grid">
+                <div class="metric-item ${schemaStatus}">
+                    <span class="label">Schema Types</span>
+                    <span class="value">${analysisData.schema?.types?.join(', ') || 'None found'}</span>
+                    <span class="tooltip">${schemaStatus === 'good' ? 'Valid schema markup found' : 'No valid schema markup found'}</span>
+                </div>
+                <div class="metric-item">
+                    <span class="label">Valid Schema</span>
+                    <span class="value">${analysisData.schema?.is_valid ? 'Yes' : 'No'}</span>
+                </div>
+            </div>
+        `;
+
+        // Display technical analysis with status indicators
+        const techAnalysis = document.querySelector('#techAnalysis .card-content');
+        techAnalysis.innerHTML = `
+            <div class="metric-grid">
+                <div class="metric-item ${analysisData.technical?.mobile_responsive ? 'good' : 'bad'}">
+                    <span class="label">Mobile Responsive</span>
+                    <span class="value">${analysisData.technical?.mobile_responsive ? 'Yes' : 'No'}</span>
+                    <span class="tooltip">${analysisData.technical?.mobile_responsive ? 'Page is mobile-friendly' : 'Page needs mobile optimization'}</span>
+                </div>
+                <div class="metric-item ${analysisData.technical?.ssl_enabled ? 'good' : 'bad'}">
+                    <span class="label">SSL Enabled</span>
+                    <span class="value">${analysisData.technical?.ssl_enabled ? 'Yes' : 'No'}</span>
+                    <span class="tooltip">${analysisData.technical?.ssl_enabled ? 'Secure connection enabled' : 'SSL certificate not found'}</span>
+                </div>
+                <div class="metric-item">
+                    <span class="label">Canonical URL</span>
+                    <span class="value">${analysisData.technical?.canonical_url || 'Not set'}</span>
+                </div>
+            </div>
+        `;
+
+        // Display performance metrics with status indicators
+        const performanceAnalysis = document.querySelector('#performanceAnalysis .card-content');
+        const loadTimeStatus = getMetricStatus(analysisData.performance?.page_load_time, 3, 'lower');
+        const fcpStatus = getMetricStatus(analysisData.performance?.first_contentful_paint, 1.8, 'lower');
+        const ttiStatus = getMetricStatus(analysisData.performance?.time_to_interactive, 3.8, 'lower');
+        performanceAnalysis.innerHTML = `
+            <div class="metric-grid">
+                <div class="metric-item ${loadTimeStatus}">
+                    <span class="label">Page Load Time</span>
+                    <span class="value">${formatMetric(analysisData.performance?.page_load_time, 'time')}</span>
+                    <span class="tooltip">Recommended: < 3 seconds</span>
+                </div>
+                <div class="metric-item ${fcpStatus}">
+                    <span class="label">First Contentful Paint</span>
+                    <span class="value">${formatMetric(analysisData.performance?.first_contentful_paint, 'time')}</span>
+                    <span class="tooltip">Recommended: < 1.8 seconds</span>
+                </div>
+                <div class="metric-item ${ttiStatus}">
+                    <span class="label">Time to Interactive</span>
+                    <span class="value">${formatMetric(analysisData.performance?.time_to_interactive, 'time')}</span>
+                    <span class="tooltip">Recommended: < 3.8 seconds</span>
+                </div>
+            </div>
+        `;
+
+        // Display benchmarks with visual indicators
+        const benchmarksDisplay = document.querySelector('#benchmarksDisplay .card-content');
+        benchmarksDisplay.innerHTML = `
+            <div class="metric-grid">
+                <div class="metric-item">
+                    <span class="label">Word Count Benchmark</span>
+                    <span class="value">${formatMetric(analysisData.benchmarks?.word_count, 'count')}</span>
+                </div>
+                <div class="metric-item">
+                    <span class="label">Keyword Density Benchmark</span>
+                    <span class="value">${formatMetric(analysisData.benchmarks?.keyword_density, 'percentage')}</span>
+                </div>
+                <div class="metric-item">
+                    <span class="label">Readability Benchmark</span>
+                    <span class="value">${formatMetric(analysisData.benchmarks?.readability)}</span>
+                </div>
+            </div>
+        `;
+
+        // Display recommendations with severity indicators
+        const recommendationsDisplay = document.querySelector('#recommendationsDisplay .card-content');
+        if (Array.isArray(analysisData.recommendations)) {
+            recommendationsDisplay.innerHTML = analysisData.recommendations
+                .map(rec => `
+                    <div class="recommendation sev-${(rec.severity || 'medium').toLowerCase()}">
+                        <div class="rec-header">
+                            <span class="rec-severity">${rec.severity || 'Medium'}</span>
+                            <h4>${rec.title || 'Untitled Recommendation'}</h4>
+                        </div>
+                        <p class="rec-description">${rec.description || 'No description available'}</p>
+                        ${rec.resource_link ? `
+                            <a href="${rec.resource_link}" target="_blank" rel="noopener noreferrer" class="rec-link">
+                                Learn more
+                            </a>
+                        ` : ''}
+                    </div>
+                `)
+                .join('');
+        } else {
+            recommendationsDisplay.innerHTML = '<p>No recommendations available</p>';
+        }
+
+        // Display competitor summary with visual indicators
+        const competitorSummary = document.querySelector('#competitorSummary .card-content');
+        if (Array.isArray(data.competitor_analysis_summary) && data.competitor_analysis_summary.length > 0) {
+            competitorSummary.innerHTML = `
+                <div class="competitor-grid">
+                    ${data.competitor_analysis_summary.map(comp => `
+                        <div class="competitor-card">
+                            <div class="comp-url">${comp.url || 'N/A'}</div>
+                            <div class="comp-metrics">
+                                <div class="metric-item">
+                                    <span class="label">Title Length</span>
+                                    <span class="value">${formatMetric(comp.title_length)}</span>
+                                </div>
+                                <div class="metric-item">
+                                    <span class="label">Word Count</span>
+                                    <span class="value">${formatMetric(comp.word_count, 'count')}</span>
+                                </div>
+                                <div class="metric-item">
+                                    <span class="label">Keyword Density</span>
+                                    <span class="value">${formatMetric(comp.keyword_density, 'percentage')}</span>
+                                </div>
+                            </div>
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+        } else {
+            competitorSummary.innerHTML = '<p>No competitor data available</p>';
+        }
+
+        // Display warning if present
+        if (data.warning) {
+            const warningDiv = document.createElement('div');
+            warningDiv.className = 'warning-message';
+            warningDiv.textContent = data.warning;
+            resultsSection.insertBefore(warningDiv, resultsSection.firstChild);
+        }
+    } catch (error) {
+        console.error('Error displaying results:', error);
+        showError('Error processing the analysis results. Please try again.');
     }
 } 
