@@ -148,8 +148,11 @@ seoForm.addEventListener('submit', async (e) => {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'Accept': 'application/json'
+                'Accept': 'application/json',
+                'Origin': window.location.origin
             },
+            mode: 'cors',
+            credentials: 'omit',
             body: JSON.stringify({ url, keyword, country }),
             signal: controller.signal
         }).catch(error => {
@@ -161,8 +164,23 @@ seoForm.addEventListener('submit', async (e) => {
         
         console.log('Response received:', {
             status: response.status,
-            statusText: response.statusText
+            statusText: response.statusText,
+            headers: Object.fromEntries(response.headers.entries()),
+            ok: response.ok
         });
+        
+        if (!response.ok) {
+            // Handle specific error cases
+            if (response.status === 422) {
+                throw new Error('Invalid input data. Please check your URL and keyword.');
+            } else if (response.status >= 500) {
+                throw new Error('Server error. Please try again later.');
+            } else if (response.status === 0) {
+                throw new Error('CORS error. Please check if the API is accessible.');
+            }
+            const errorData = await response.json().catch(() => ({}));
+            throw new Error(errorData.detail || response.statusText || `HTTP error! status: ${response.status}`);
+        }
         
         console.log('Parsing response JSON...');
         const data = await response.json().catch(error => {
@@ -172,23 +190,31 @@ seoForm.addEventListener('submit', async (e) => {
         
         console.log('Response data:', data);
 
-        if (!response.ok) {
-            // Handle specific error cases
-            if (response.status === 422) {
-                throw new Error('Invalid input data. Please check your URL and keyword.');
-            } else if (response.status >= 500) {
-                throw new Error('Server error. Please try again later.');
-            }
-            throw new Error(data.detail || response.statusText || `HTTP error! status: ${response.status}`);
+        // Check if we have a valid response structure
+        if (!data) {
+            console.error('Empty response received');
+            throw new Error('Empty response received from server');
         }
 
-        if (!data || data.status !== 'success') {
-            throw new Error(data.error_message || 'Analysis failed');
+        // Check response status
+        if (data.status !== 'success') {
+            console.error('Analysis failed:', data.error || 'Unknown error');
+            throw new Error(data.error || 'Analysis failed');
         }
 
+        // Check for required fields
         if (!data.target_analysis) {
+            console.error('Missing target analysis data');
             throw new Error('No analysis data received');
         }
+
+        // Log the data structure for debugging
+        console.log('Response structure:', {
+            hasTargetAnalysis: !!data.target_analysis,
+            hasCompetitorSummary: !!data.competitor_analysis_summary,
+            hasBenchmarks: !!data.benchmarks,
+            hasRecommendations: !!data.recommendations
+        });
 
         console.log('Displaying results...');
         displayResults(data);
@@ -200,6 +226,8 @@ seoForm.addEventListener('submit', async (e) => {
             showError('Unable to connect to the server. Please check if the service is available.');
         } else if (error.message.includes('parse response data')) {
             showError('Invalid response from server. Please try again.');
+        } else if (error.message.includes('CORS error')) {
+            showError('Unable to access the API. Please check if the service is available.');
         } else {
             showError(`Error: ${error.message || 'Network error or API unavailable'}`);
         }
@@ -226,10 +254,12 @@ function showError(message) {
 
 // Results Display
 function displayResults(data) {
+    console.log('Starting displayResults function');
     console.log('Raw response data:', data);
     
     // Validate response data
     if (!data) {
+        console.error('No data received from server');
         showError('No data received from server');
         return;
     }
@@ -239,13 +269,19 @@ function displayResults(data) {
     console.log('Analysis data:', analysisData);
 
     if (!analysisData) {
+        console.error('Invalid response format from server');
         showError('Invalid response format from server');
         return;
     }
 
     // Clear previous results and errors
     errorDisplay.style.display = 'none';
+    
+    // Ensure results section is visible
     resultsSection.style.display = 'block';
+    console.log('Results section display set to:', resultsSection.style.display);
+    console.log('Results section visibility:', window.getComputedStyle(resultsSection).display);
+    console.log('Results section computed style:', window.getComputedStyle(resultsSection));
 
     // Remove any existing warning message
     const existingWarning = document.querySelector('.warning-message');
@@ -256,6 +292,11 @@ function displayResults(data) {
     try {
         // Display target information with status indicators
         const targetInfo = document.querySelector('#targetInfo .card-content');
+        if (!targetInfo) {
+            console.error('Target info element not found');
+            return;
+        }
+        console.log('Found target info element, updating content');
         targetInfo.innerHTML = `
             <div class="info-grid">
                 <div class="info-item">
